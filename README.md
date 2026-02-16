@@ -28,10 +28,6 @@ The **first player** to connect becomes the **ADMIN**.
 
 Admin commands:
 - Type `start` - Start the game
-- Type `question` - Ask a new question
-  - You'll be prompted to enter the question and 4 options
-  - After sending, wait a few seconds for players to answer
-  - Then enter the correct answer number (1-4)
 - Type `stop` - End the game and show final scores
 
 ### Step 4: Player Controls
@@ -56,7 +52,6 @@ Regular players wait for questions and type their answer (1-4).
 - `Server.py` - The game server
 - `KahootClient.py` - The client that players use
 - `Player.py` - Player data class
-- `comm_utils.py` - Communication utilities
 
 ## Requirements
 - Python 3.x

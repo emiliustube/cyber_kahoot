@@ -1,13 +1,12 @@
-import comm_utils
 import select
 import socket
 from Player import Player
 
 class my_server:
     def __init__(self, port):
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket = socket.socket()
         self.server_socket.bind(('', port))
-        self.server_socket.listen(5)
+        self.server_socket.listen()
         self.players = []
         self.clients = []
         self.game_started = False
@@ -18,13 +17,22 @@ class my_server:
         print("Kahoot Server is now listening...")
 
         while True:
-            sockets, _, _ = select.select(self.clients + [self.server_socket], [], [], 0.1)
+            ready_to_read = self.clients + [self.server_socket]
+            # We use select.select here to efficiently wait/until network sockets are ready for reading,
+            # without blocking the whole server forever.
+            # Arguments:
+            #   - ready_to_read: the list of sockets we want to check for incoming data (clients + the server socket)
+            #   - []: we don't care about sockets ready for writing right now
+            #   - []: we don't care about sockets with errors right now
+            #   - 0.1: timeout in seconds -- so the server tick loops every 0.1s if nothing happens (non-blocking)
+            # select.select returns 3 lists; we only care about the first: readable sockets, so we grab [0].
+            readable_sockets = select.select(ready_to_read, [], [], 0.1)[0]
 
-            for soc in sockets:
-                if soc == self.server_socket:
+            for socket_with_data in readable_sockets:
+                if socket_with_data == self.server_socket:
                     self.handle_new_connection()
                 else:
-                    self.handle_request(soc)
+                    self.handle_request(socket_with_data)
 
         self.server_socket.close()
 
@@ -34,7 +42,7 @@ class my_server:
         self.clients.append(client_socket)
         
         # Ask for name
-        comm_utils.send_message(client_socket, "NAME_REQUEST")
+        client_socket.send("NAME_REQUEST\n".encode())
         print(f"New client connected from {addr}")
 
     def find_player_by_socket(self, client_socket):
@@ -46,32 +54,46 @@ class my_server:
 
     def handle_request(self, client_socket):
         """Handle messages from clients"""
-        message = comm_utils.receive_message(client_socket)
+        try:
+            data = client_socket.recv(1024).decode()
+        except:
+            data = None
 
-        if not message:
+        if not data:
             # Client disconnected
             self.remove_client(client_socket)
             return
 
-        player = self.find_player_by_socket(client_socket)
+        # Handle multiple messages separated by newlines
+        messages = data.strip().split('\n') # strip - מוחק רווחים  split - מחלק לשורות את הרווחים
         
-        # If player doesn't exist yet, this is their name
-        if player is None:
-            self.register_player(client_socket, message)
-            return
+        for message in messages:
+            message = message.strip()
+            if not message:
+                continue
+            
+            print(f"Received message: '{message}' from client")
+                
+            player = self.find_player_by_socket(client_socket)
+            
+            # If player doesn't exist yet, this is their name
+            if player is None:
+                self.register_player(client_socket, message)
+                continue
 
-        # Handle different message types
-        if message.startswith("START_GAME") and player.IsAdmin():
-            self.start_game()
-        elif message.startswith("QUESTION:") and player.IsAdmin():
-            self.send_question(message)
-        elif message.startswith("ANSWER:") and player.IsAdmin():
-            self.set_correct_answer(message)
-        elif message.startswith("STOP_GAME") and player.IsAdmin():
-            self.stop_game()
-        elif message.isdigit() and self.game_started:
-            # Player answered a question
-            self.handle_answer(player, message)
+            # Handle different message types
+            if message.startswith("START_GAME") and player.IsAdmin():
+                self.start_game()
+            elif message.startswith("QUESTION:") and player.IsAdmin():
+                self.send_question(message)
+            elif message.startswith("STOP_GAME") and player.IsAdmin():
+                self.stop_game()
+            elif message.isdigit() and self.game_started:
+                # Player answered a question
+                print(f"Detected answer: {message} from {player.GetName()}")
+                self.handle_answer(player, message)
+            else:
+                print(f"Unknown message type: '{message}'")
 
     def register_player(self, client_socket, name):
         """Register a new player with their name"""
@@ -80,10 +102,10 @@ class my_server:
         self.players.append(player)
         
         if is_admin:
-            comm_utils.send_message(client_socket, "ROLE:ADMIN")
+            client_socket.send("ROLE:ADMIN\n".encode())
             print(f"Player '{name}' joined as ADMIN")
         else:
-            comm_utils.send_message(client_socket, "ROLE:PLAYER")
+            client_socket.send("ROLE:PLAYER\n".encode())
             print(f"Player '{name}' joined as PLAYER")
         
         # Notify all players
@@ -93,71 +115,168 @@ class my_server:
         """Start the game"""
         self.game_started = True
         self.broadcast("GAME_STARTED")
-        print("Game has started!")
+        non_admin_count = 0
+        for p in self.players:
+            if not p.IsAdmin():
+                non_admin_count += 1
+        print(f"Game has started! {non_admin_count} players in the game.")
 
     def send_question(self, message):
         """Send question to all players"""
-        # Format: QUESTION:question_text|option1|option2|option3|option4
+        # Format: QUESTION:question_text|option1|option2|option3|option4|correct_answer
+        # We split the message only at the first ":" using split(":", 1)
+        # This handles cases where ":" may appear in the question text.
+        # The result is a list: [prefix, the_rest], so [1] extracts everything after the first ":".
         question_data = message.split(":", 1)[1]
-        self.waiting_for_answers = {}
-        self.broadcast(f"QUESTION:{question_data}")
-        print(f"Question sent: {question_data}")
-
-    def set_correct_answer(self, message):
-        """Admin sets the correct answer and calculates points"""
-        # Format: ANSWER:1 (where 1 is the correct answer number)
-        correct = message.split(":")[1]
-        self.current_correct_answer = correct
+        parts = question_data.split("|")
         
-        # Check all answers and award points
+        if len(parts) == 6:
+            # Check how many players are in the game (excluding admin)
+            non_admin_players = []
+            for p in self.players:
+                if not p.IsAdmin():
+                    non_admin_players.append(p)
+            
+            if len(non_admin_players) == 0:
+                print("ERROR: No players in the game! Wait for players to join.")
+                # Send error message to admin
+                admin = [p for p in self.players if p.IsAdmin()][0]
+                admin.client_socket.send("ROUND_OVER:\n⚠️ No players in the game! Wait for players to join first.\n\n".encode())
+                return
+            
+            # Extract correct answer and store it
+            self.current_correct_answer = parts[5]
+            # Send question without the answer to players
+            question_to_send = "|".join(parts[0:5])
+            self.waiting_for_answers = {}
+            
+            # Only send to non-admin players
+            for player in non_admin_players:
+                try:
+                    player.client_socket.send(f"QUESTION:{question_to_send}\n".encode())
+                except:
+                    pass
+            
+            print(f"Question sent to {len(non_admin_players)} players: {parts[0]}")
+            print(f"Correct answer: {self.current_correct_answer}")
+            print(f"Waiting for players: {[p.GetName() for p in non_admin_players]}")
+
+    def calculate_round_results(self):
+        """Calculate results after all players answered"""
+        print("\nAll players answered! Calculating results...")
+        
+        correct_count = 0
+        wrong_count = 0
+        
+        # Check each player's answer
         for player in self.players:
             if player.IsAdmin():
                 continue
             
             if player.client_socket in self.waiting_for_answers:
                 player_answer = self.waiting_for_answers[player.client_socket]
-                if player_answer == correct:
+                
+                if player_answer == self.current_correct_answer:
                     player.AddPoint()
-                    comm_utils.send_message(player.client_socket, "RESULT:Correct! +1 point")
-                    print(f"{player.GetName()} answered correctly!")
+                    player.client_socket.send("RESULT:✓ Correct! +1 point\n".encode())
+                    print(f"  ✓ {player.GetName()} answered correctly!")
+                    correct_count += 1
                 else:
-                    comm_utils.send_message(player.client_socket, "RESULT:Wrong answer!")
-                    print(f"{player.GetName()} answered wrong.")
+                    player.client_socket.send("RESULT:✗ Wrong answer!\n".encode())
+                    print(f"  ✗ {player.GetName()} answered wrong.")
+                    wrong_count += 1
+        
+        # Create round summary
+        round_summary = f"\n--- ROUND RESULTS ---\n"
+        round_summary += f"Correct answers: {correct_count}\n"
+        round_summary += f"Wrong answers: {wrong_count}\n\n"
+        round_summary += "Current Scores:\n"
+        
+        # Sort players by points
+        sorted_players = sorted([p for p in self.players if not p.IsAdmin()], 
+                                key=lambda x: x.GetPoints(), reverse=True)
+        
+        for player in sorted_players:
+            round_summary += f"{player.GetName()}: {player.GetPoints()} points\n"
+        
+        # Send round summary to everyone
+        self.broadcast(f"ROUND_OVER:{round_summary}")
         
         # Clear answers for next question
         self.waiting_for_answers = {}
         self.current_correct_answer = None
+        
+        print("Round complete!\n")
 
     def handle_answer(self, player, answer):
         """Handle player's answer"""
         if not player.IsAdmin():
             self.waiting_for_answers[player.client_socket] = answer
             print(f"{player.GetName()} answered: {answer}")
-            comm_utils.send_message(player.client_socket, "ANSWER_RECEIVED")
+            
+            # Check if all players have answered
+            non_admin_players = []
+            for p in self.players:
+                if not p.IsAdmin():
+                    non_admin_players.append(p)
+            answered_count = len(self.waiting_for_answers)
+            total_players = len(non_admin_players)
+            
+            print(f"Progress: {answered_count}/{total_players} players answered")
+            
+            if answered_count == total_players:
+                # All players answered - calculate results
+                print("All players have answered! Calculating results...")
+                self.calculate_round_results()
+            else:
+                print(f"Still waiting for {total_players - answered_count} more players...")
 
     def stop_game(self):
         """Stop the game and show statistics"""
         self.game_started = False
         
         # Sort players by points
-        sorted_players = sorted([p for p in self.players if not p.IsAdmin()], 
-                                key=lambda x: x.GetPoints(), reverse=True)
+        # Collect non-admin players
+        non_admin_players = []
+        for p in self.players:
+            if not p.IsAdmin():
+                non_admin_players.append(p)
+        # Sort by points without lambda
+        def get_points(player):
+            return player.GetPoints()
+        sorted_players = sorted(non_admin_players, key=get_points, reverse=True)
         
         # Create statistics message
-        stats = "GAME_OVER\n=== FINAL SCORES ===\n"
-        for i, player in enumerate(sorted_players, 1):
+        stats = "\n" + "="*50 + "\n"
+        stats += "           🎮 GAME OVER 🎮\n"
+        stats += "="*50 + "\n\n"
+        stats += "=== FINAL SCORES ===\n"
+        
+        i = 1
+        for player in sorted_players:
             stats += f"{i}. {player.GetName()}: {player.GetPoints()} points\n"
+            i += 1
         
         if sorted_players:
-            stats += f"\nWINNER: {sorted_players[0].GetName()}!"
+            stats += f"\n🏆 WINNER: {sorted_players[0].GetName()}! 🏆\n"
+        else:
+            stats += "\nNo players participated.\n"
         
-        self.broadcast(stats)
-        print("\n" + stats)
+        stats += "\n" + "="*50
+        
+        # Send to everyone
+        self.broadcast(f"GAME_OVER:{stats}")
+        
+        # Print on server
+        print(stats)
 
     def broadcast(self, message):
         """Send message to all connected clients"""
         for client in self.clients:
-            comm_utils.send_message(client, message)
+            try:
+                client.send((message + "\n").encode())
+            except:
+                pass
 
     def remove_client(self, client_socket):
         """Remove disconnected client"""
@@ -176,5 +295,3 @@ if __name__ == "__main__":
     server = my_server(port)
     print(f"Starting Kahoot Server on port {port}...")
     server.run_server()
-
-            

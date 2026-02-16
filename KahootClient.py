@@ -1,6 +1,6 @@
 import socket
 import threading
-
+import time
 class KahootClient:
     def __init__(self, ip, port):
         self.ip = ip
@@ -88,8 +88,10 @@ class KahootClient:
             
             print(f"\n=== QUESTION ===")
             print(question)
-            for i, option in enumerate(options, 1):
+            i = 1
+            for option in options:
                 print(f"{i}. {option}")
+                i += 1
             print()
     
     def admin_control(self):
@@ -151,7 +153,6 @@ class KahootClient:
         listen_thread.start()
         
         # Wait until role is received
-        import time
         print("Waiting for role assignment...")
         while not self.role_received and self.running:
             time.sleep(0.1)
