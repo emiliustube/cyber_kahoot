@@ -107,9 +107,8 @@ class my_server:
         else:
             client_socket.send("ROLE:PLAYER\n".encode())
             print(f"Player '{name}' joined as PLAYER")
-        
-        # Notify all players
-        self.broadcast(f"SYSTEM:{name} joined the game!")
+            # Notify only non-admin players about new player
+            self.broadcast_to_players(f"SYSTEM:{name} joined the game!")
 
     def start_game(self):
         """Start the game"""
@@ -167,7 +166,7 @@ class my_server:
             for p in non_admin_players:
                 waiting_names.append(p.GetName())
             print(f"Waiting for players: {waiting_names}")
-            
+
 
     def calculate_round_results(self):
         """Calculate results after all players answered"""
@@ -305,6 +304,15 @@ class my_server:
                 client.send((message + "\n").encode())
             except:
                 pass
+    
+    def broadcast_to_players(self, message):
+        """Send message only to non-admin players"""
+        for player in self.players:
+            if not player.IsAdmin():
+                try:
+                    player.client_socket.send((message + "\n").encode())
+                except:
+                    pass
 
     def remove_client(self, client_socket):
         """Remove disconnected client"""
@@ -319,7 +327,7 @@ class my_server:
 
 
 if __name__ == "__main__":
-    port = 12345
+    port = 12346
     server = my_server(port)
     print(f"Starting Kahoot Server on port {port}...")
     server.run_server()
