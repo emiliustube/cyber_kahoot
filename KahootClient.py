@@ -1,6 +1,6 @@
 import socket
 import time
-import select
+import threading
 import sys
 class KahootClient:
     def __init__(self, ip, port):
@@ -189,19 +189,41 @@ class KahootClient:
             else:
                 print("Invalid input! Enter 1, 2, 3, or 4 to answer questions.")
     
+    def receive_server_messages(self):
+        """Thread function to continuously receive messages from server"""
+        while self.running:
+            try:
+                data = self.receive_message()
+                if data:
+                    self.process_server_message(data)
+                else:
+                    # Server disconnected
+                    if self.running:
+                        print("\nServer disconnected!")
+                        self.running = False
+                    break
+            except Exception as e:
+                if self.running:
+                    print(f"\nError receiving message: {e}")
+                    self.running = False
+                break
+    
     def start(self):
-        """Start the client without threading"""
+        """Start the client with threading (Windows compatible)"""
         self.asking_questions = False
         self.question_step = 0
+        
+        # Start the server message receiver thread
+        receiver_thread = threading.Thread(target=self.receive_server_messages, daemon=True)
+        receiver_thread.start()
         
         # Wait until role is received
         print("Waiting for role assignment...")
         while not self.role_received and self.running:
-            # Check for server messages
-            readable = select.select([self.client_socket], [], [], 0.1)[0]
-            if readable:
-                data = self.receive_message()
-                self.process_server_message(data)
+            time.sleep(0.1)
+        
+        if not self.running:
+            return
         
         # Show initial prompt based on role
         if self.is_admin:
@@ -210,25 +232,21 @@ class KahootClient:
         else:
             print("Waiting for questions... (Enter 1-4 when you see a question)\n")
         
-        # Main loop - check both server messages and user input
+        # Main loop - handle user input
         while self.running:
-            # Check if there's data from server or user input
-            readable = select.select([self.client_socket, sys.stdin], [], [], 0.1)[0]
-            
-            for ready in readable:
-                if ready == self.client_socket:
-                    # Message from server
-                    data = self.receive_message()
-                    self.process_server_message(data)
-                    
-                elif ready == sys.stdin:
-                    # User input
-                    user_input = sys.stdin.readline().strip()
-                    self.handle_user_input(user_input)
-                    
-                    # Show prompt again if needed
-                    if self.running and self.is_admin and not self.asking_questions:
-                        print("> ", end='', flush=True)
+            try:
+                user_input = input().strip()
+                self.handle_user_input(user_input)
+                
+                # Show prompt again if needed
+                if self.running and self.is_admin and not self.asking_questions:
+                    print("> ", end='', flush=True)
+            except EOFError:
+                break
+            except KeyboardInterrupt:
+                print("\nExiting...")
+                self.running = False
+                break
         
         self.client_socket.close()
 
@@ -240,7 +258,7 @@ if __name__ == "__main__":
     
     port = input("Enter server port (press Enter for 12345): ")
     if not port:
-        port = 12346
+        port = 12345
     else:
         port = int(port)
     

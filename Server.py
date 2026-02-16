@@ -327,7 +327,7 @@ class my_server:
 
 
 if __name__ == "__main__":
-    port = 12346
+    port = 12345
     server = my_server(port)
     print(f"Starting Kahoot Server on port {port}...")
     server.run_server()
