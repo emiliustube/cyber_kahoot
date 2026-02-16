@@ -179,31 +179,3 @@ if __name__ == "__main__":
     
     client = KahootClient(ip, port)
     client.start()
-
-
-            
-            
-            
-            
-
-
-
-
-
-            
-
-                
-                   
-           
-            
-
-
-
-        
-        
-    
-        
-        
-
-        
-    

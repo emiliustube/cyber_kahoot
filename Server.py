@@ -140,7 +140,11 @@ class my_server:
             if len(non_admin_players) == 0:
                 print("ERROR: No players in the game! Wait for players to join.")
                 # Send error message to admin
-                admin = [p for p in self.players if p.IsAdmin()][0]
+                admin = None
+                for p in self.players:
+                    if p.IsAdmin():
+                        admin = p
+                        break
                 admin.client_socket.send("ROUND_OVER:\n⚠️ No players in the game! Wait for players to join first.\n\n".encode())
                 return
             
@@ -159,7 +163,11 @@ class my_server:
             
             print(f"Question sent to {len(non_admin_players)} players: {parts[0]}")
             print(f"Correct answer: {self.current_correct_answer}")
-            print(f"Waiting for players: {[p.GetName() for p in non_admin_players]}")
+            waiting_names = []
+            for p in non_admin_players:
+                waiting_names.append(p.GetName())
+            print(f"Waiting for players: {waiting_names}")
+            
 
     def calculate_round_results(self):
         """Calculate results after all players answered"""
@@ -186,15 +194,28 @@ class my_server:
                     print(f"  ✗ {player.GetName()} answered wrong.")
                     wrong_count += 1
         
-        # Create round summary
         round_summary = f"\n--- ROUND RESULTS ---\n"
         round_summary += f"Correct answers: {correct_count}\n"
         round_summary += f"Wrong answers: {wrong_count}\n\n"
         round_summary += "Current Scores:\n"
         
-        # Sort players by points
-        sorted_players = sorted([p for p in self.players if not p.IsAdmin()], 
-                                key=lambda x: x.GetPoints(), reverse=True)
+        # Sort players by points (from highest to lowest)
+        # First, collect all non-admin players
+        non_admin_players = []
+        for p in self.players:
+            if not p.IsAdmin():
+                non_admin_players.append(p)
+        
+        # Sort using manual comparison - bubble sort
+        sorted_players = non_admin_players.copy()
+        for i in range(len(sorted_players)):
+            for j in range(i + 1, len(sorted_players)):
+                # If player at position i has fewer points than player at position j, swap them
+                if sorted_players[i].GetPoints() < sorted_players[j].GetPoints():
+                    # Swap the players
+                    temp = sorted_players[i]
+                    sorted_players[i] = sorted_players[j]
+                    sorted_players[j] = temp
         
         for player in sorted_players:
             round_summary += f"{player.GetName()}: {player.GetPoints()} points\n"
@@ -235,16 +256,23 @@ class my_server:
         """Stop the game and show statistics"""
         self.game_started = False
         
-        # Sort players by points
-        # Collect non-admin players
+        # Sort players by points (from highest to lowest)
+        # First, collect all non-admin players
         non_admin_players = []
         for p in self.players:
             if not p.IsAdmin():
                 non_admin_players.append(p)
-        # Sort by points without lambda
-        def get_points(player):
-            return player.GetPoints()
-        sorted_players = sorted(non_admin_players, key=get_points, reverse=True)
+        
+        # Sort using manual comparison - bubble sort
+        sorted_players = non_admin_players.copy()
+        for i in range(len(sorted_players)):
+            for j in range(i + 1, len(sorted_players)):
+                # If player at position i has fewer points than player at position j, swap them
+                if sorted_players[i].GetPoints() < sorted_players[j].GetPoints():
+                    # Swap the players
+                    temp = sorted_players[i]
+                    sorted_players[i] = sorted_players[j]
+                    sorted_players[j] = temp
         
         # Create statistics message
         stats = "\n" + "="*50 + "\n"
